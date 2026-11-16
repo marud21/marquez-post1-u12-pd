@@ -23,3 +23,19 @@ calculadoras (no comparten un esqueleto de algoritmo, solo la firma).
 
 Modelo de dominio (`dominio/`): `SolicitudReembolso`, `CategoriaGasto`, `EstadoSolicitud`, sin imports de
 Spring ni de JPA.
+
+## Decisiones de diseño (Parte 1)
+
+1. **Orden de la cadena: documentos → monto → duplicados.** El eslabón más caro es `ValidadorDuplicados`
+   (recorre la lista de pendientes que el servicio cargó de la base de datos); los otros dos son
+   comparaciones O(1) sobre la propia solicitud. Ubicándolo **último**, una solicitud sin soportes o con un
+   monto fuera de tope se rechaza sin recorrer la lista. Se pierde solo que, si hay varios problemas, el
+   empleado ve primero el más barato de detectar y no el de duplicado (la cadena reporta el primer rechazo).
+2. **Selección de calculadora con un mapa construido desde `List<CalculadoraReembolso>`** (inyectada por
+   Spring con todos los `@Component`), no con un `switch` manual. RF2 exige agregar categorías sin modificar
+   el código existente: con el mapa, "bienestar" es una clase nueva `CalculadoraBienestar` y una constante
+   en `CategoriaGasto`; ni `SelectorCalculadora` ni las otras calculadoras cambian. El `switch` obligaría a
+   editar el selector en cada categoría nueva (y el compilador no avisa si se olvida un caso con `default`).
+
+Pruebas: 20 (validadores, cadena, calculadoras, selector, notificadores y 2 de integración
+`@SpringBootTest` con MockMvc, H2 y `@SpyBean` sobre los tres observadores).
