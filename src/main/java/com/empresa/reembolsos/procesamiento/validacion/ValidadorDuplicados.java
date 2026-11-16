@@ -1,6 +1,7 @@
 package com.empresa.reembolsos.procesamiento.validacion;
 
 import com.empresa.reembolsos.dominio.SolicitudReembolso;
+import com.empresa.reembolsos.infraestructura.RepositorioSolicitudesJpa;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -8,6 +9,9 @@ import java.util.List;
 /** No consulta la base de datos: recibe las pendientes del empleado ya cargadas por el servicio. */
 @Component
 public class ValidadorDuplicados extends ValidadorSolicitud {
+
+    // VIOLACION INTENCIONAL (Paso 5): el procesamiento no debe depender de la infraestructura
+    private RepositorioSolicitudesJpa repositorio;
 
     @Override
     protected ResultadoValidacion validarPropio(SolicitudReembolso solicitud, List<SolicitudReembolso> pendientes) {
