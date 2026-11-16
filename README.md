@@ -39,3 +39,32 @@ Spring ni de JPA.
 
 Pruebas: 20 (validadores, cadena, calculadoras, selector, notificadores y 2 de integración
 `@SpringBootTest` con MockMvc, H2 y `@SpyBean` sobre los tres observadores).
+
+## Qué se descartó y por qué
+
+Criterio (guía, sección 4.2): ¿la variabilidad que justificaría la alternativa es real y documentada hoy, o
+es especulación sobre un futuro que aún no llegó?
+
+1. **`ApplicationEventPublisher` + `@EventListener` en vez de `List<ObservadorCambioEstado>` inyectada.**
+   Con tres observadores fijos y conocidos en compilación, un bus de eventos genérico no aporta
+   desacoplamiento real (ya lo da la interfaz) y sí dificulta rastrear quién reacciona a qué cambio.
+   *Reconsiderar si:* un observador necesita ejecutarse después del commit o de forma asíncrona
+   (`@TransactionalEventListener`), por ejemplo con la API de Contabilidad.
+2. **Visitor o Abstract Factory para exportar reportes en varios formatos.** Solo existe el requisito de CSV;
+   no hay una segunda solicitud real (no se cumple la Rule of Three). *Reconsiderar si:* Contabilidad pide
+   formalmente un segundo y un tercer formato.
+3. **(Propio) Una jerarquía de excepciones por validador** (`DocumentosFaltantesException`,
+   `MontoExcedidoException`, `SolicitudDuplicadaException`) en lugar de `ResultadoValidacion` + una sola
+   `SolicitudInvalidaException` con el motivo. Se consideró para que el controlador devolviera códigos
+   distintos por tipo de rechazo. Se descartó: hoy los tres rechazos se tratan igual (HTTP 400 con un mensaje
+   para el empleado) y nadie consume el tipo de error; tres clases más solo moverían el texto del motivo a
+   nombres de clase, y además obligarían a los eslabones a lanzar excepciones como control de flujo, rompiendo
+   el contrato "aprobar o pasar" de la cadena. *Reconsiderar si:* un cliente (por ejemplo, el frontend o la API
+   de Contabilidad) necesita reaccionar programáticamente distinto según el motivo; entonces bastaría agregar
+   un código enumerado a `ResultadoValidacion`, sin jerarquía de excepciones.
+4. **(Propio) Un puerto `RepositorioSolicitudes` "por simetría" con Hexagonal.** Es la alternativa evaluada en
+   ADR-001: sin un cambio de motor previsto, sería una interfaz con una sola implementación posible.
+   *Reconsiderar si:* aparece una segunda fuente de datos o una migración de motor.
+5. **(Propio) Anotar el dominio con `@Entity`.** Era lo más rápido para que `JpaRepository` funcionara, pero
+   habría roto el requisito de un dominio sin JPA; se resolvió con `META-INF/orm.xml`, que no agrega
+   indirección en el código Java.
