@@ -37,8 +37,62 @@ Spring ni de JPA.
    en `CategoriaGasto`; ni `SelectorCalculadora` ni las otras calculadoras cambian. El `switch` obligaría a
    editar el selector en cada categoría nueva (y el compilador no avisa si se olvida un caso con `default`).
 
-Pruebas: 20 (validadores, cadena, calculadoras, selector, notificadores y 2 de integración
+Pruebas de la Parte 1: 20 (validadores, cadena, calculadoras, selector, notificadores y 2 de integración
 `@SpringBootTest` con MockMvc, H2 y `@SpyBean` sobre los tres observadores).
+
+Detalles de implementación relevantes:
+
+- **Dominio sin JPA con `JpaRepository` directo:** el enunciado pide ambas cosas a la vez. Se resolvió
+  declarando el mapeo en `src/main/resources/META-INF/orm.xml`; `SolicitudReembolso` no tiene anotaciones.
+- **Tope de viajes coherente:** `ValidadorMontoMaximo` usa el tope de viajes como **diario** (150.000 ×
+  días), igual que `CalculadoraViaje`; con un tope fijo de 150.000, un viaje de 3 días por 400.000 se habría
+  rechazado aunque la fórmula de RF2 lo aprueba completo.
+- **Período = mes y año:** `ValidadorDuplicados` compara `YearMonth`; comparar solo el mes trataría como
+  duplicada una solicitud de noviembre de 2025 frente a otra de noviembre de 2026.
+
+## Decisiones de diseño (Parte 2)
+
+3. **Persistencia en capas simples y notificación sin cambios** — documentada en
+   [`docs/adr/ADR-001.md`](docs/adr/ADR-001.md). Resumen: el criterio de la guía (sección 6.2) para
+   Hexagonal —vida útil larga **con cambios de infraestructura**— no se cumple para la persistencia (no hay
+   ningún plan de cambiar de motor), así que `SolicitudReembolsoService` sigue usando
+   `RepositorioSolicitudesJpa` directamente. Para la notificación sí hay un cambio con fecha (la API de
+   Contabilidad el próximo trimestre), pero `ObservadorCambioEstado` ya es el punto de extensión: bastará con
+   cambiar `NotificadorContabilidad` o agregar un observador, sin tocar el servicio. Consecuencia negativa
+   aceptada: si algún día cambia el motor, el puerto se introducirá de forma retroactiva.
+4. **La Regla 1 prohíbe Spring Data, JPA, infraestructura y adaptadores, pero no todo `org.springframework`.**
+   Las anotaciones de estereotipo (`@Component`) solo declaran que la clase es un bean: no acoplan la lógica a
+   ninguna tecnología de entrada/salida, no cambian el comportamiento y se pueden instanciar con `new` en las
+   pruebas unitarias (como hacen `ValidadoresTest` y `CalculadorasTest`). Lo que sí ataría la lógica de
+   negocio a un detalle técnico es depender de repositorios, entidades JPA o clases web: eso haría que validar
+   un monto requiera una base de datos o un contexto HTTP. Prohibir todo `org.springframework` obligaría a
+   registrar cada validador, calculadora y notificador a mano en una clase `@Configuration`, con más código y
+   ningún beneficio real para este proyecto.
+
+Ajustes a las reglas del enunciado, encontrados al ejecutarlas: la Regla 2 incluye el propio paquete
+`..adaptadores.rest..` (ArchUnit cuenta como "acceso" que el controlador lea su propio campo `servicio`), y la
+Regla 3 filtra las clases cuyo nombre empieza por `Calculadora`, porque `SelectorCalculadora` vive en el mismo
+paquete y no es una estrategia. Además se configuró surefire para que `mvn verify` también ejecute
+`ReglasArquitectura` (su nombre no termina en `Test`).
+
+### Integración continua
+
+`.github/workflows/arquitectura.yml` ejecuta primero `mvn test -Dtest=ReglasArquitectura` y luego
+`mvn verify` en cada push a `main`. El historial incluye el commit **`test: violacion de arquitectura
+intencional`** (`ValidadorDuplicados` con un campo `RepositorioSolicitudesJpa`), cuyo pipeline falla en el
+paso de reglas por `procesamientoSinPersistenciaNiWeb`, seguido de **`Revert "test: violacion de arquitectura
+intencional"`**, con el pipeline de nuevo en verde. Ver la pestaña **Actions** del repositorio.
+
+## Evidencia
+
+**Creación de solicitudes: cálculo por categoría y rechazos de la cadena**
+![Crear solicitudes](docs/capturas/01-crear-solicitudes.png)
+
+**Cambio de estado: los tres observadores**
+![Observadores](docs/capturas/02-cambio-estado-observadores.png)
+
+**Reglas de arquitectura y suite completa**
+![ArchUnit](docs/capturas/03-reglas-arquitectura.png)
 
 ## Qué se descartó y por qué
 
@@ -68,3 +122,34 @@ es especulación sobre un futuro que aún no llegó?
 5. **(Propio) Anotar el dominio con `@Entity`.** Era lo más rápido para que `JpaRepository` funcionara, pero
    habría roto el requisito de un dominio sin JPA; se resolvió con `META-INF/orm.xml`, que no agrega
    indirección en el código Java.
+
+## Cómo ejecutar
+
+```bash
+mvn clean verify                          # 20 pruebas + 4 reglas de arquitectura
+mvn spring-boot:run                       # http://localhost:8080
+mvn test -Dtest=ReglasArquitectura        # solo las reglas de ArchUnit
+```
+
+```bash
+curl -X POST localhost:8080/api/solicitudes -H "Content-Type: application/json" \
+     -d '{"empleadoId":"E-1001","categoria":"VIAJE","montoSolicitado":400000,"fechaGasto":"2026-11-03","diasViaje":3,"documentosSoporte":true}'
+curl -X PUT localhost:8080/api/solicitudes/1/estado -H "Content-Type: application/json" -d '"APROBADA"'
+```
+
+## Herramientas utilizadas
+
+- Java 17, Spring Boot 3.3 (Web, Data JPA), H2, mapeo JPA en XML
+- JUnit 5, Mockito (`@SpyBean`), MockMvc, ArchUnit 1.2
+- Apache Maven, GitHub Actions, Git, GitHub
+
+## Conclusiones
+
+Este proyecto se diseñó al revés que los laboratorios anteriores: primero se identificó qué variaba en cada
+requisito y solo después se eligió el patrón. Así, cada patrón quedó justificado por una variabilidad real —el
+conjunto de verificaciones (Chain of Responsibility), la fórmula por categoría (Strategy) y los interesados en
+un cambio de estado (Observer)— y agregar una verificación, una categoría o un interesado es crear una clase
+sin modificar las existentes. En la Parte 2, la pregunta más útil no fue "¿qué arquitectura es mejor?", sino
+"¿qué cambio de infraestructura es real?": eso llevó a no introducir un puerto de persistencia y a reconocer
+que la notificación ya estaba preparada. ArchUnit y el pipeline convierten esas decisiones en reglas que se
+verifican en cada push, como mostró la violación intencional.
